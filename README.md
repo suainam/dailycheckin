@@ -6,6 +6,8 @@
 
 基于「Docker」/「青龙面板」/「群晖」/「本地」的每日签到脚本
 
+本 fork 另支持 [GitHub Actions 签到](docs/github-actions.md)，与现有执行方式相互独立。
+
 <!-- SHIELD GROUP -->
 <div id="shield">
 

@@ -15,6 +15,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--include", nargs="+", help="任务执行包含的任务列表")
     parser.add_argument("--exclude", nargs="+", help="任务执行排除的任务列表")
+    parser.add_argument("--fail-on-error", action="store_true", help="任一账号执行异常或配置无效时返回非零状态")
     return parser.parse_args()
 
 
@@ -80,12 +81,17 @@ def checkin():
         exclude = [one for one in exclude if one in checkin_map.keys()]
     task_list = list(set(include) - set(exclude))
     notice_info, check_info = check_config(task_list)
+    if not check_info:
+        if args.fail_on_error:
+            raise SystemExit(1)
+        return
     if check_info:
         task_name_str = "\n".join(
             [f"「{checkin_map.get(one.upper())[0]}」账号数 : {len(value)}" for one, value in check_info.items()]
         )
         print(f"\n---------- 本次执行签到任务如下 ----------\n\n{task_name_str}\n\n")
         content_list = []
+        failure_count = 0
         for one_check, check_list in check_info.items():
             check_name, check_func = checkin_map.get(one_check.upper())
             print(f"----------开始执行「{check_name}」签到----------")
@@ -95,6 +101,7 @@ def checkin():
                     content_list.append(f"「{check_name}」\n{msg}")
                     print(f"第 {index + 1} 个账号: ✅✅✅✅✅")
                 except Exception as e:
+                    failure_count += 1
                     content_list.append(f"「{check_name}」\n{e}")
                     print(f"第 {index + 1} 个账号: ❌❌❌❌❌\n{e}")
         print("\n\n")
@@ -112,6 +119,8 @@ def checkin():
             f"项目地址: https://github.com/Sitoi/dailycheckin"
         )
         push_message(content_list=content_list, notice_info=notice_info)
+        if args.fail_on_error and failure_count:
+            raise SystemExit(1)
         return
 
 

@@ -1,0 +1,45 @@
+name: Daily check-in
+
+on:
+  schedule:
+    - cron: "37 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-checkin
+  cancel-in-progress: false
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+
+      - name: Install locked dependencies
+        run: uv sync --frozen
+
+      - name: Materialize configuration
+        env:
+          DAILYCHECKIN_CONFIG_JSON: ${{ secrets.DAILYCHECKIN_CONFIG_JSON }}
+        run: uv run --frozen python scripts/materialize_config.py
+
+      - name: Run daily check-in
+        run: uv run --frozen python -m dailycheckin.main --fail-on-error
+
+      - name: Remove configuration
+        if: always()
+        run: rm -f config.json

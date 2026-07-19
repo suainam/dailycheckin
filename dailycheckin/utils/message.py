@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import re
 import time
 from urllib.parse import quote_plus
@@ -71,7 +72,21 @@ def message2telegram(tg_api_host, tg_proxy, tg_bot_token, tg_user_id, content):
         }
     else:
         proxies = None
-    requests.post(url=url, data=send_data, proxies=proxies)
+    preview_head = content[:300].replace("\n", "\\n")
+    preview_tail = content[-300:].replace("\n", "\\n")
+    print(f"Telegram 消息长度: {len(content)}")
+    if os.environ.get("DAILYCHECKIN_DEBUG_LOGS", "").lower() in {"1", "true", "yes"}:
+        print(f"Telegram 消息预览(前300): {preview_head}")
+        if len(content) > 300:
+            print(f"Telegram 消息预览(后300): {preview_tail}")
+    response = requests.post(url=url, data=send_data, proxies=proxies)
+    print(f"Telegram 响应状态: {response.status_code}")
+    if os.environ.get("DAILYCHECKIN_DEBUG_LOGS", "").lower() in {"1", "true", "yes"}:
+        print(f"Telegram 响应体: {response.text[:1000]}")
+    response.raise_for_status()
+    payload = response.json()
+    if not payload.get("ok", False):
+        raise ValueError(f"Telegram API 返回失败: {payload}")
 
 
 def message2feishu(fskey, content):
@@ -293,7 +308,12 @@ def push_message(content_list: list, notice_info: dict):
             merge_push = True
     if not merge_push:
         message_list = content_list
-    for message in message_list:
+    print(f"推送消息数: {len(message_list)}")
+    for index, message in enumerate(message_list, start=1):
+        print(f"第 {index} 条推送长度: {len(message)}")
+        if index <= 3 and os.environ.get("DAILYCHECKIN_DEBUG_LOGS", "").lower() in {"1", "true", "yes"}:
+            preview = message[:200].replace(chr(10), "\\n")
+            print(f"第 {index} 条推送预览(前200): {preview}")
         if qmsg_key:
             try:
                 message2qmsg(qmsg_key=qmsg_key, qmsg_type=qmsg_type, content=message)

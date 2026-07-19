@@ -7,6 +7,17 @@ import requests
 from dailycheckin import CheckIn
 
 
+def safe_json(response, fallback: dict, context: str) -> dict:
+    try:
+        data = response.json()
+    except Exception as exc:
+        text = getattr(response, "text", "")[:200].replace("\n", " ")
+        detail = f"; body={text}" if os.environ.get("DAILYCHECKIN_DEBUG_LOGS", "").lower() in {"1", "true", "yes"} else ""
+        print(f"Bilibili {context} JSON 解析失败: {exc}; status={getattr(response, 'status_code', 'unknown')}{detail}")
+        return fallback
+    return data if isinstance(data, dict) else fallback
+
+
 class BiliBili(CheckIn):
     name = "Bilibili"
 
@@ -36,7 +47,7 @@ class BiliBili(CheckIn):
         return list(
             filter(
                 lambda x: x["time"].split()[0] == today,
-                session.get(url=url).json().get("data").get("list"),
+                (session.get(url=url).json().get("data") or {}).get("list") or [],
             )
         )
 
@@ -55,7 +66,7 @@ class BiliBili(CheckIn):
         return list(
             filter(
                 lambda x: x["time"].split()[0] == today,
-                session.get(url=url).json().get("data").get("list"),
+                (session.get(url=url).json().get("data") or {}).get("list") or [],
             )
         )
 
@@ -105,14 +116,22 @@ class BiliBili(CheckIn):
         """
         url = "https://api.bilibili.com/x/vip/privilege/receive"
         post_data = {"type": receive_type, "csrf": bili_jct}
-        ret = session.post(url=url, data=post_data).json()
+        ret = safe_json(
+            session.post(url=url, data=post_data),
+            {"code": -1, "message": "invalid json", "data": {}},
+            "vip_privilege_receive",
+        )
         return ret
 
     @staticmethod
     def vip_manga_reward(session) -> dict:
         """获取漫画大会员福利"""
         url = "https://manga.bilibili.com/twirp/user.v1.User/GetVipReward"
-        ret = session.post(url=url, json={"reason_id": 1}).json()
+        ret = safe_json(
+            session.post(url=url, json={"reason_id": 1}),
+            {"code": -1, "message": "invalid json", "data": {}},
+            "vip_manga_reward",
+        )
         return ret
 
     @staticmethod
@@ -125,7 +144,11 @@ class BiliBili(CheckIn):
         """
         url = "http://api.bilibili.com/x/v2/history/report"
         post_data = {"aid": aid, "cid": cid, "progres": progres, "csrf": bili_jct}
-        ret = session.post(url=url, data=post_data).json()
+        ret = safe_json(
+            session.post(url=url, data=post_data),
+            {"code": -1, "message": "invalid json", "data": {}},
+            "report_task",
+        )
         return ret
 
     @staticmethod
@@ -136,7 +159,11 @@ class BiliBili(CheckIn):
         """
         url = "https://api.bilibili.com/x/web-interface/share/add"
         post_data = {"aid": aid, "csrf": bili_jct}
-        ret = session.post(url=url, data=post_data).json()
+        ret = safe_json(
+            session.post(url=url, data=post_data),
+            {"code": -1, "message": "invalid json", "data": {}},
+            "share_task",
+        )
         return ret
 
     @staticmethod
@@ -164,7 +191,11 @@ class BiliBili(CheckIn):
             "order_type": order_type,
         }
         url = "https://api.bilibili.com/x/relation/followings"
-        ret = session.get(url=url, params=params).json()
+        ret = safe_json(
+            session.get(url=url, params=params),
+            {"code": -1, "message": "invalid json", "data": {}},
+            "get_followings",
+        )
         return ret
 
     @staticmethod
@@ -195,7 +226,11 @@ class BiliBili(CheckIn):
             "keyword": keyword,
         }
         url = "https://api.bilibili.com/x/space/arc/search"
-        ret = session.get(url=url, params=params).json()
+        ret = safe_json(
+            session.get(url=url, params=params),
+            {"code": -1, "message": "invalid json", "data": {}},
+            "space_arc_search",
+        )
         count = 2
         data_list = [
             {
@@ -204,7 +239,7 @@ class BiliBili(CheckIn):
                 "title": one.get("title"),
                 "owner": one.get("author"),
             }
-            for one in ret.get("data", {}).get("list", {}).get("vlist", [])[:count]
+            for one in (ret.get("data") or {}).get("list", {}).get("vlist", [])[:count]
         ]
         return data_list, count
 
@@ -223,7 +258,11 @@ class BiliBili(CheckIn):
             "oid": uid,
             "csrf": bili_jct,
         }
-        ret = session.post(url=url, data=post_data).json()
+        ret = safe_json(
+            session.post(url=url, data=post_data),
+            {"code": -1, "message": "invalid json", "data": {}},
+            "coin_add",
+        )
         return ret
 
     @staticmethod
@@ -251,7 +290,7 @@ class BiliBili(CheckIn):
         """B站直播获取金银瓜子状态"""
         url = "https://api.live.bilibili.com/pay/v1/Exchange/getStatus"
         ret = session.get(url=url).json()
-        data = ret.get("data")
+        data = ret.get("data") or {}
         silver = data.get("silver", 0)
         gold = data.get("gold", 0)
         coin = data.get("coin", 0)
@@ -278,7 +317,7 @@ class BiliBili(CheckIn):
                 "title": one.get("title"),
                 "owner": one.get("owner", {}).get("name"),
             }
-            for one in ret.get("data", {}).get("archives", [])
+            for one in (ret.get("data") or {}).get("archives") or []
         ]
         return data_list
 
@@ -287,7 +326,11 @@ class BiliBili(CheckIn):
         """B站银瓜子换硬币"""
         url = "https://api.live.bilibili.com/xlive/revenue/v1/wallet/silver2coin"
         post_data = {"csrf": bili_jct}
-        ret = session.post(url=url, data=post_data).json()
+        ret = safe_json(
+            session.post(url=url, data=post_data),
+            {"code": -1, "message": "invalid json", "data": {}},
+            "silver2coin",
+        )
         return ret
 
     def main(self):
@@ -367,20 +410,25 @@ class BiliBili(CheckIn):
                 coin_msg = f"今日成功投币{success_count + coins_av_count}/{self.check_item.get('coin_num', 5)}个"
             else:
                 coin_msg = f"今日成功投币{coins_av_count}/{self.check_item.get('coin_num', 5)}个"
-            aid = aid_list[0].get("aid")
-            cid = aid_list[0].get("cid")
-            title = aid_list[0].get("title")
-            report_ret = self.report_task(session=session, bili_jct=bili_jct, aid=aid, cid=cid)
-            if report_ret.get("code") == 0:
-                report_msg = f"观看《{title}》300秒"
+            report_msg = "无可用视频，跳过观看任务"
+            share_msg = "无可用视频，跳过分享任务"
+            if aid_list:
+                aid = aid_list[0].get("aid")
+                cid = aid_list[0].get("cid")
+                title = aid_list[0].get("title")
+                report_ret = self.report_task(session=session, bili_jct=bili_jct, aid=aid, cid=cid)
+                if report_ret.get("code") == 0:
+                    report_msg = f"观看《{title}》300秒"
+                else:
+                    report_msg = "任务失败"
+                share_ret = self.share_task(session=session, bili_jct=bili_jct, aid=aid)
+                if share_ret.get("code") == 0:
+                    share_msg = f"分享《{title}》成功"
+                else:
+                    share_msg = "分享失败"
+                    print(share_msg)
             else:
-                report_msg = "任务失败"
-            share_ret = self.share_task(session=session, bili_jct=bili_jct, aid=aid)
-            if share_ret.get("code") == 0:
-                share_msg = f"分享《{title}》成功"
-            else:
-                share_msg = "分享失败"
-                print(share_msg)
+                print("Bilibili: 未获取到可用视频，跳过观看/分享任务")
             s2c_msg = "不兑换硬币"
             if silver2coin:
                 silver2coin_ret = self.silver2coin(session=session, bili_jct=bili_jct)
