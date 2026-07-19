@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import requests
@@ -16,7 +17,9 @@ class Tieba(CheckIn):
     def __init__(self, check_item: dict):
         self.TBS_URL = "http://tieba.baidu.com/dc/common/tbs"
         self.LIKE_URL = "http://c.tieba.baidu.com/c/f/forum/like"
+        self.STATUS_LIKE_URL = "https://tieba.baidu.com/mo/q/newmoindex"
         self.SIGN_URL = "http://c.tieba.baidu.com/c/c/forum/sign"
+        self.USER_INFO_URL = "https://tieba.baidu.com/f/user/json_userinfo"
         self.LOGIN_INFO_URL = "https://zhidao.baidu.com/api/loginInfo"
         self.SIGN_KEY = "tiebaclient!!!"
 
@@ -48,14 +51,26 @@ class Tieba(CheckIn):
         self.bduss = cookie_dict.get("BDUSS", "")
         if not self.bduss:
             raise ValueError("Cookie 中未找到 BDUSS")
+        try:
+            self.concurrency = min(max(int(check_item.get("concurrency", 1)), 1), 2)
+        except (TypeError, ValueError):
+            self.concurrency = 1
 
-    def request(self, url: str, method: str = "get", data: Optional[dict] = None, retry: int = 3) -> dict:
+    def request(
+        self,
+        url: str,
+        method: str = "get",
+        data: Optional[dict] = None,
+        retry: int = 3,
+        session: Optional[requests.Session] = None,
+    ) -> dict:
+        client = session or self.session
         for i in range(retry):
             try:
                 if method.lower() == "get":
-                    response = self.session.get(url, timeout=10)
+                    response = client.get(url, timeout=10)
                 else:
-                    response = self.session.post(url, data=data, timeout=10)
+                    response = client.post(url, data=data, timeout=10)
 
                 response.raise_for_status()
                 if not response.text.strip():
@@ -87,6 +102,14 @@ class Tieba(CheckIn):
                 return False, "登录失败，Cookie 异常"
             tbs = result.get("tbs", "")
             try:
+                try:
+                    tieba_user_info = self.request(self.USER_INFO_URL) or {}
+                    tieba_user_data = tieba_user_info.get("data") or {}
+                    user_name = tieba_user_data.get("user_name_show")
+                except Exception:
+                    user_name = None
+                if user_name:
+                    return tbs, user_name
                 user_info = self.request(self.LOGIN_INFO_URL)
                 user_name = user_info.get("userName", "未知用户")
             except Exception:
@@ -96,6 +119,24 @@ class Tieba(CheckIn):
             return False, f"登录验证异常: {e}"
 
     def get_favorite(self) -> list[dict]:
+        try:
+            result = self.request(self.STATUS_LIKE_URL)
+            if result.get("no") != 0:
+                raise ValueError(result.get("error", "获取签到状态失败"))
+            forums = [
+                {
+                    "id": str(forum.get("forum_id", "")),
+                    "name": forum.get("forum_name", ""),
+                    "is_sign": forum.get("is_sign", 0),
+                }
+                for forum in (result.get("data") or {}).get("like_forum", [])
+            ]
+            if forums:
+                print(f"共获取到 {len(forums)} 个关注的贴吧（含签到状态）")
+                return forums
+        except Exception as e:
+            print(f"获取贴吧签到状态失败，回退旧接口: {e}")
+
         forums = []
         page_no = 1
 
@@ -142,58 +183,36 @@ class Tieba(CheckIn):
         return forums
 
     def sign_forums(self, forums, tbs: str) -> dict:
-        success_count, error_count, exist_count, shield_count = 0, 0, 0, 0
+        signed_values = {"1", "true"}
+        pending_forums = [forum for forum in forums if str(forum.get("is_sign", "0")).lower() not in signed_values]
+        success_count, error_count, shield_count = 0, 0, 0
+        exist_count = len(forums) - len(pending_forums)
         total = len(forums)
-        print(f"开始签到 {total} 个贴吧")
-        last_request_time = time.time()
-        for idx, forum in enumerate(forums):
-            elapsed = time.time() - last_request_time
-            delay = max(0, 1.0 + random.uniform(0.5, 1.5) - elapsed)
-            time.sleep(delay)
-            last_request_time = time.time()
-            if (idx + 1) % 10 == 0:
-                extra_delay = random.uniform(5, 10)
-                print(f"已签到 {idx + 1}/{total} 个贴吧，休息 {extra_delay:.2f} 秒")
-                time.sleep(extra_delay)
-
-            forum_name = forum.get("name", "")
-            forum_id = forum.get("id", "")
-            log_prefix = f"【{forum_name}】吧({idx + 1}/{total})"
-
-            try:
-                data = self.SIGN_DATA.copy()
-                data.update(
-                    {
-                        "BDUSS": self.bduss,
-                        "fid": forum_id,
-                        "kw": forum_name,
-                        "tbs": tbs,
-                        "timestamp": str(int(time.time())),
-                    }
-                )
-                data = self.encode_data(data)
-                result = self.request(self.SIGN_URL, "post", data)
-                error_code = result.get("error_code", "")
-                if error_code == "0":
-                    success_count += 1
-                    if "user_info" in result:
-                        rank = result["user_info"]["user_sign_rank"]
-                        print(f"{log_prefix} 签到成功，第{rank}个签到")
+        print(f"开始签到 {total} 个贴吧，跳过已签到 {exist_count} 个")
+        with ThreadPoolExecutor(max_workers=self.concurrency) as executor:
+            for start in range(0, len(pending_forums), self.concurrency):
+                batch = pending_forums[start : start + self.concurrency]
+                time.sleep(random.uniform(1.5, 2.5))
+                futures = [
+                    executor.submit(self.sign_forum, forum, tbs, start + offset + 1, len(pending_forums))
+                    for offset, forum in enumerate(batch)
+                ]
+                for future in futures:
+                    status = future.result()
+                    if status == "success":
+                        success_count += 1
+                    elif status == "exist":
+                        exist_count += 1
+                    elif status == "shield":
+                        shield_count += 1
                     else:
-                        print(f"{log_prefix} 签到成功")
-                elif error_code == "160002":
-                    exist_count += 1
-                    print(f"{log_prefix} {result.get('error_msg', '今日已签到')}")
-                elif error_code == "340006":
-                    shield_count += 1
-                    print(f"{log_prefix} 贴吧已被屏蔽")
-                else:
-                    error_count += 1
-                    print(f"{log_prefix} 签到失败，错误: {result.get('error_msg', '未知错误')}")
+                        error_count += 1
 
-            except Exception as e:
-                error_count += 1
-                print(f"{log_prefix} 签到异常: {e!s}")
+                processed = start + len(batch)
+                if processed % 10 == 0 and processed < len(pending_forums):
+                    extra_delay = random.uniform(5, 10)
+                    print(f"已处理 {processed}/{len(pending_forums)} 个待签到贴吧，休息 {extra_delay:.2f} 秒")
+                    time.sleep(extra_delay)
         return {
             "total": total,
             "success": success_count,
@@ -201,6 +220,41 @@ class Tieba(CheckIn):
             "shield": shield_count,
             "error": error_count,
         }
+
+    def sign_forum(self, forum: dict, tbs: str, index: int, total: int) -> str:
+        forum_name = forum.get("name", "")
+        forum_id = forum.get("id", "")
+        log_prefix = f"【{forum_name}】吧({index}/{total})"
+        try:
+            data = self.SIGN_DATA.copy()
+            data.update(
+                {
+                    "BDUSS": self.bduss,
+                    "fid": forum_id,
+                    "kw": forum_name,
+                    "tbs": tbs,
+                    "timestamp": str(int(time.time())),
+                }
+            )
+            with requests.Session() as session:
+                session.headers.update(self.session.headers)
+                session.cookies.update(self.session.cookies)
+                result = self.request(self.SIGN_URL, "post", self.encode_data(data), session=session)
+            error_code = result.get("error_code", "")
+            if error_code == "0":
+                rank = (result.get("user_info") or {}).get("user_sign_rank")
+                print(f"{log_prefix} 签到成功" + (f"，第{rank}个签到" if rank else ""))
+                return "success"
+            if error_code == "160002":
+                print(f"{log_prefix} {result.get('error_msg', '今日已签到')}")
+                return "exist"
+            if error_code == "340006":
+                print(f"{log_prefix} 贴吧已被屏蔽")
+                return "shield"
+            print(f"{log_prefix} 签到失败，错误: {result.get('error_msg', '未知错误')}")
+        except Exception as e:
+            print(f"{log_prefix} 签到异常: {e!s}")
+        return "error"
 
     def main(self) -> str:
         try:
