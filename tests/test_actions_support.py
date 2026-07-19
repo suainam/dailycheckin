@@ -32,6 +32,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertIn("DAILYCHECKIN_CONFIG_JSON", workflow)
         self.assertIn("--fail-on-error", workflow)
+        self.assertIn('cron: "01 00,17 * * *"', workflow)
+        self.assertIn('timezone: "Asia/Shanghai"', workflow)
         self.assertNotIn("pull_request_target", workflow)
 
 
