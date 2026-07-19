@@ -8,6 +8,8 @@
 
 本 fork 另支持 [GitHub Actions 签到](docs/github-actions.md)，与现有执行方式相互独立。
 
+维护者与 Agent 可从 [AGENTS.md](AGENTS.md) 查看执行规则，并从 [CONTEXT.md](CONTEXT.md) 了解本 fork 的边界与权威来源。
+
 <!-- SHIELD GROUP -->
 <div id="shield">
 
